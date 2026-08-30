@@ -76,7 +76,7 @@ Panel {
       var name = String(inputs[i].description || "").toLowerCase()
       if (name.indexOf("obsbot") >= 0 || name.indexOf("meet 2") >= 0) return inputs[i]
     }
-    return mediaDevices.defaultVideoInput
+    return null
   }
   onPreviewSettingChanged: if (previewPending === previewSetting) previewPending = null
 

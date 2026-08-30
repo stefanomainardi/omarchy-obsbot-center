@@ -17,7 +17,7 @@ BarWidget {
 
   function refresh() {
     if (!statusProc.running) statusProc.running = true
-    if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
+    if (root.opened && panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
   }
 
   function open() {
@@ -82,7 +82,7 @@ BarWidget {
     interval: 5000
     running: true
     repeat: true
-    onTriggered: root.refresh()
+    onTriggered: if (!statusProc.running) statusProc.running = true
   }
 
   Process {

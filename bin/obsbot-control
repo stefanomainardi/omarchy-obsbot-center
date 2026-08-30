@@ -173,7 +173,7 @@ set_audio() {
 }
 
 set_camera_feature() {
-  local feature="${1:-}" value="${2:-}" device vendor product
+  local feature="${1:-}" value="${2:-}" device vendor product state_tmp
   case "${feature}:${value}" in
     fov:wide|fov:medium|fov:narrow|auto-framing:off|auto-framing:solo|auto-framing:group|gesture-control:off|gesture-control:on|gesture-zoom:1x|gesture-zoom:2x|gesture-zoom:3x|gesture-zoom:4x|mirror:off|mirror:on|vertical:off|vertical:on|led:off|led:on|keep-awake:off|keep-awake:on|auto-sleep:off|auto-sleep:30s|auto-sleep:2m|auto-sleep:10m|hdr:off|hdr:on|microphone:off|microphone:on|audio-agc:off|audio-agc:on|audio-distance:standard|audio-distance:near|audio-distance:far|audio-mode:pure|audio-mode:omni|audio-mode:directional|audio-mode:dual-directional|sleep-microphone:off|sleep-microphone:on) ;;
     *)
@@ -216,7 +216,8 @@ set_camera_feature() {
     }
   fi
 
-  mkdir -p "$STATE_DIR"
+  mkdir -p -- "$STATE_DIR"
+  chmod 700 -- "$STATE_DIR"
   local fov="wide" auto_framing="off" gesture_control="off" gesture_zoom="2x" mirror="off" vertical="off" led="on" keep_awake="off" auto_sleep="off" hdr="off"
   local microphone="on" audio_agc="on" audio_distance="standard" audio_mode="omni" sleep_microphone="off"
   if [[ -r "$VENDOR_STATE" ]]; then
@@ -268,9 +269,12 @@ set_camera_feature() {
     audio-mode) audio_mode="$value" ;;
     sleep-microphone) sleep_microphone="$value" ;;
   esac
+  state_tmp="$(mktemp --tmpdir="$STATE_DIR" .meet2.conf.XXXXXX)" || return 1
+  chmod 600 -- "$state_tmp"
   printf 'fov=%s\nauto_framing=%s\ngesture_control=%s\ngesture_zoom=%s\nmirror=%s\nvertical=%s\nled=%s\nkeep_awake=%s\nauto_sleep=%s\nhdr=%s\nmicrophone=%s\naudio_agc=%s\naudio_distance=%s\naudio_mode=%s\nsleep_microphone=%s\n' \
     "$fov" "$auto_framing" "$gesture_control" "$gesture_zoom" "$mirror" "$vertical" "$led" "$keep_awake" "$auto_sleep" "$hdr" \
-    "$microphone" "$audio_agc" "$audio_distance" "$audio_mode" "$sleep_microphone" >"$VENDOR_STATE"
+    "$microphone" "$audio_agc" "$audio_distance" "$audio_mode" "$sleep_microphone" >"$state_tmp"
+  mv -f -- "$state_tmp" "$VENDOR_STATE"
 }
 
 set_control() {

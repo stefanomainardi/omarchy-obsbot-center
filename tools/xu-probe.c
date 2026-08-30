@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/usb/video.h>
@@ -182,7 +184,7 @@ int main(int argc, char **argv) {
   }
 
   const char *device = argc > 1 ? argv[1] : "/dev/video0";
-  int fd = open(device, O_RDWR | O_NONBLOCK);
+  int fd = open(device, O_RDWR | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) {
     fprintf(stderr, "cannot open %s: %s\n", device, strerror(errno));
     return 1;
