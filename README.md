@@ -7,6 +7,16 @@ The panel follows the active Omarchy theme and opens the video stream only while
 > [!NOTE]
 > This project is independent from OBSBOT. It is not affiliated with, sponsored by, or endorsed by OBSBOT or Omarchy.
 
+## Interface
+
+| Basic                                                                   | Intelligent framing                                                           | Microphone                                                                |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| ![Basic image controls and Meet 2 profiles](docs/screenshots/basic.png) | ![Auto framing, field of view, and gesture controls](docs/screenshots/ai.png) | ![OBSBOT microphone volume and mute controls](docs/screenshots/audio.png) |
+
+| Optics                                                                                 | Color                                                                                      | Device                                                                                    |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| ![Focus, exposure, gain, and backlight controls](docs/screenshots/advanced-optics.png) | ![White balance, anti-flicker, hue, and HDR controls](docs/screenshots/advanced-color.png) | ![Orientation, LED, keep-awake, and sleep controls](docs/screenshots/advanced-device.png) |
+
 ## Features
 
 | Area                    | Controls                                                                                                     |
