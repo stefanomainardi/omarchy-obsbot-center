@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.stefanomainardi.obsbot-center",
+  "name": "OBSBOT Center",
+  "version": "0.3.0",
+  "author": "Stefano Mainardi",
+  "license": "MIT",
+  "description": "Preview and control an OBSBOT Meet 2 from the Omarchy bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "OBSBOT Center",
+    "description": "Camera status and controls for OBSBOT Meet 2",
+    "category": "System",
+    "aliases": [
+      "obsbot",
+      "meet 2",
+      "webcam",
+      "camera",
+      "auto framing",
+      "gesture",
+      "microphone",
+      "hdr"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 5,
+      "hideWhenAbsent": false,
+      "preview": true
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 2,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 5,
+        "description": "How often to synchronize controls with the camera while the panel is open."
+      },
+      {
+        "key": "hideWhenAbsent",
+        "type": "boolean",
+        "label": "Hide when disconnected",
+        "defaultValue": false,
+        "description": "Hide the bar icon when no OBSBOT camera is connected."
+      },
+      {
+        "key": "preview",
+        "type": "boolean",
+        "label": "Enable live preview",
+        "defaultValue": true,
+        "description": "Start the live preview only while the panel is open. Disable it to keep the camera free for other applications."
+      }
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+
+      - name: Check shell syntax
+        run: bash -n bin/obsbot-control tests/test_audio.sh tests/test_protocol.sh tests/test_static.sh
+
+      - name: Build protocol helper
+        run: cc -std=c11 -Wall -Wextra -Werror -O2 tools/xu-probe.c -o tools/xu-probe
+
+      - name: Test protocol encoding
+        run: tests/test_protocol.sh
+
+      - name: Test PipeWire command handling
+        run: tests/test_audio.sh
+
+      - name: Check theme safety
+        run: |
+          if rg -n '#[0-9a-fA-F]{6,8}' --glob '*.qml' .; then
+            echo 'Fixed UI colors bypass the Omarchy theme' >&2
+            exit 1
+          fi

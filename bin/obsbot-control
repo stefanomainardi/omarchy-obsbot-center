@@ -1,0 +1,393 @@
+#!/usr/bin/env bash
+
+set -u
+
+readonly OBSBOT_VENDOR_ID="3564"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly XU_HELPER="${SCRIPT_DIR}/../tools/xu-probe"
+readonly STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
+readonly STATE_DIR="${STATE_HOME}/obsbot-center-omarchy"
+readonly VENDOR_STATE="${STATE_DIR}/meet2.conf"
+
+usage() {
+  printf 'Usage: %s detect | status | set CONTROL VALUE | reset optics|color|device | preset NAME | camera FEATURE VALUE | audio volume VALUE | audio mute on|off|toggle\n' "$0"
+}
+
+detect() {
+  local node properties vendor product_name capabilities
+  for node in /dev/video*; do
+    [[ -e "$node" ]] || continue
+    properties="$(udevadm info --query=property --name="$node" 2>/dev/null)"
+    vendor="$(sed -n 's/^ID_VENDOR_ID=//p' <<<"$properties" | head -n 1)"
+    product_name="$(sed -n 's/^ID_V4L_PRODUCT=//p' <<<"$properties" | head -n 1)"
+    capabilities="$(sed -n 's/^ID_V4L_CAPABILITIES=//p' <<<"$properties" | head -n 1)"
+    if [[ ("${vendor,,}" == "$OBSBOT_VENDOR_ID" || "${product_name,,}" == *obsbot*) && "$capabilities" == *capture* ]]; then
+      printf 'connected=1\ndevice=%s\n' "$node"
+      return 0
+    fi
+  done
+  printf 'connected=0\n'
+}
+
+find_audio_source() {
+  command -v wpctl >/dev/null 2>&1 || return 1
+  wpctl status -n 2>/dev/null \
+    | sed -n '/Sources:/,/Filters:/p' \
+    | sed -n '/OBSBOT/{s/.*[^0-9]\([0-9][0-9]*\)\..*OBSBOT.*/\1/p;q}'
+}
+
+find_camera() {
+  local node properties vendor product_name capabilities
+
+  for node in /dev/video*; do
+    [[ -e "$node" ]] || continue
+    properties="$(udevadm info --query=property --name="$node" 2>/dev/null)"
+    vendor="$(sed -n 's/^ID_VENDOR_ID=//p' <<<"$properties" | head -n 1)"
+    product_name="$(sed -n 's/^ID_V4L_PRODUCT=//p' <<<"$properties" | head -n 1)"
+    capabilities="$(v4l2-ctl --device "$node" --all 2>/dev/null | sed -n '/Device Caps/,/Media Driver Info/p')"
+
+    if [[ ("${vendor,,}" == "$OBSBOT_VENDOR_ID" || "${product_name,,}" == *obsbot*) && "$capabilities" == *"Video Capture"* ]]; then
+      printf '%s\n' "$node"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+device_property() {
+  local device="$1" property="$2"
+  udevadm info --query=property --name="$device" 2>/dev/null \
+    | sed -n "s/^${property}=//p" \
+    | head -n 1
+}
+
+read_control() {
+  local device="$1" control="$2" value
+  value="$(v4l2-ctl --device "$device" --get-ctrl "$control" 2>/dev/null)" || return 0
+  value="${value##*: }"
+  printf '%s=%s\n' "$control" "${value%% *}"
+}
+
+read_control_metadata() {
+  local controls="$1" control="$2" line minimum maximum step default_value flags
+  line="$(sed -n "/^[[:space:]]*${control}[[:space:]]/p" <<<"$controls" | head -n 1)"
+  if [[ -z "$line" ]]; then
+    printf '%s_available=0\n' "$control"
+    return
+  fi
+
+  minimum="$(sed -n 's/.*min=\(-\?[0-9]\+\).*/\1/p' <<<"$line")"
+  maximum="$(sed -n 's/.*max=\(-\?[0-9]\+\).*/\1/p' <<<"$line")"
+  step="$(sed -n 's/.*step=\(-\?[0-9]\+\).*/\1/p' <<<"$line")"
+  default_value="$(sed -n 's/.*default=\(-\?[0-9]\+\).*/\1/p' <<<"$line")"
+  flags="$(sed -n 's/.*flags=\([^, ]*\).*/\1/p' <<<"$line")"
+
+  printf '%s_available=1\n' "$control"
+  [[ -n "$minimum" ]] && printf '%s_min=%s\n' "$control" "$minimum"
+  [[ -n "$maximum" ]] && printf '%s_max=%s\n' "$control" "$maximum"
+  [[ -n "$step" ]] && printf '%s_step=%s\n' "$control" "$step"
+  [[ -n "$default_value" ]] && printf '%s_default=%s\n' "$control" "$default_value"
+  [[ -n "$flags" ]] && printf '%s_flags=%s\n' "$control" "$flags"
+}
+
+status() {
+  local device controls model vendor product audio_source audio_status audio_volume
+  if ! device="$(find_camera)"; then
+    printf 'connected=0\nerror=OBSBOT camera not detected\n'
+    return 0
+  fi
+
+  model="$(device_property "$device" ID_MODEL)"
+  vendor="$(device_property "$device" ID_VENDOR_ID)"
+  product="$(device_property "$device" ID_MODEL_ID)"
+  controls="$(v4l2-ctl --device "$device" --list-ctrls 2>/dev/null)"
+
+  printf 'connected=1\ndevice=%s\nmodel=%s\nvendor_id=%s\nproduct_id=%s\n' \
+    "$device" "${model//_/ }" "$vendor" "$product"
+  if [[ "${vendor,,}" == "$OBSBOT_VENDOR_ID" && "${product,,}" == "fefb" && -x "$XU_HELPER" ]]; then
+    printf 'vendor_controls=1\n'
+    if [[ -r "$VENDOR_STATE" ]]; then
+      sed -n '/^fov=/p; /^gesture_zoom=/p; /^vertical=/p; /^led=/p; /^keep_awake=/p; /^auto_sleep=/p; /^microphone=/p; /^audio_agc=/p; /^audio_distance=/p; /^audio_mode=/p; /^sleep_microphone=/p' "$VENDOR_STATE"
+    fi
+    "$XU_HELPER" "$device" state 2>/dev/null || true
+  else
+    printf 'vendor_controls=0\n'
+  fi
+
+  local control
+  for control in brightness contrast saturation hue sharpness gain \
+    backlight_compensation zoom_absolute focus_absolute \
+    focus_automatic_continuous auto_exposure exposure_time_absolute \
+    white_balance_automatic white_balance_temperature red_balance \
+    blue_balance power_line_frequency; do
+    read_control_metadata "$controls" "$control"
+    read_control "$device" "$control"
+  done
+
+  if audio_source="$(find_audio_source)" && [[ -n "$audio_source" ]]; then
+    audio_status="$(wpctl get-volume "$audio_source" 2>/dev/null || true)"
+    audio_volume="$(awk '{ printf "%d", ($2 * 100) + 0.5 }' <<<"$audio_status")"
+    printf 'audio_source_available=1\naudio_source=%s\nmic_volume=%s\nmic_muted=%s\n' \
+      "$audio_source" "${audio_volume:-100}" "$([[ "$audio_status" == *'[MUTED]'* ]] && printf on || printf off)"
+  else
+    printf 'audio_source_available=0\n'
+  fi
+}
+
+set_audio() {
+  local action="${1:-}" value="${2:-}" audio_source
+  audio_source="$(find_audio_source)" || {
+    printf 'OBSBOT microphone source not detected\n' >&2
+    return 1
+  }
+  [[ -n "$audio_source" ]] || {
+    printf 'OBSBOT microphone source not detected\n' >&2
+    return 1
+  }
+
+  case "$action" in
+    volume)
+      [[ "$value" =~ ^[0-9]+$ ]] && ((value <= 150)) || {
+        printf 'Microphone volume must be an integer from 0 to 150\n' >&2
+        return 2
+      }
+      wpctl set-volume "$audio_source" "${value}%"
+      ;;
+    mute)
+      case "$value" in
+        on) wpctl set-mute "$audio_source" 1 ;;
+        off) wpctl set-mute "$audio_source" 0 ;;
+        toggle) wpctl set-mute "$audio_source" toggle ;;
+        *)
+        printf 'Microphone mute value must be on, off, or toggle\n' >&2
+        return 2
+        ;;
+      esac
+      ;;
+    *)
+      printf 'Unsupported audio action\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+set_camera_feature() {
+  local feature="${1:-}" value="${2:-}" device vendor product
+  case "${feature}:${value}" in
+    fov:wide|fov:medium|fov:narrow|auto-framing:off|auto-framing:solo|auto-framing:group|gesture-control:off|gesture-control:on|gesture-zoom:1x|gesture-zoom:2x|gesture-zoom:3x|gesture-zoom:4x|mirror:off|mirror:on|vertical:off|vertical:on|led:off|led:on|keep-awake:off|keep-awake:on|auto-sleep:off|auto-sleep:30s|auto-sleep:2m|auto-sleep:10m|hdr:off|hdr:on|microphone:off|microphone:on|audio-agc:off|audio-agc:on|audio-distance:standard|audio-distance:near|audio-distance:far|audio-mode:pure|audio-mode:omni|audio-mode:directional|audio-mode:dual-directional|sleep-microphone:off|sleep-microphone:on) ;;
+    *)
+      printf 'Unsupported camera feature or value\n' >&2
+      return 2
+      ;;
+  esac
+
+  device="$(find_camera)" || {
+    printf 'OBSBOT camera not detected\n' >&2
+    return 1
+  }
+  vendor="$(device_property "$device" ID_VENDOR_ID)"
+  product="$(device_property "$device" ID_MODEL_ID)"
+  if [[ "${vendor,,}" != "$OBSBOT_VENDOR_ID" || "${product,,}" != "fefb" ]]; then
+    printf 'This vendor control is currently verified only for OBSBOT Meet 2\n' >&2
+    return 2
+  fi
+  [[ -x "$XU_HELPER" ]] || {
+    printf 'Vendor control helper is not installed\n' >&2
+    return 1
+  }
+  "$XU_HELPER" "$device" set "$feature" "$value" || return
+
+  if [[ "$feature" == "microphone" ]]; then
+    local attempt reconnected=""
+    for attempt in {1..20}; do
+      [[ ! -e "$device" ]] && break
+      sleep 0.25
+    done
+    for attempt in {1..120}; do
+      if reconnected="$(find_camera 2>/dev/null)"; then
+        break
+      fi
+      sleep 0.25
+    done
+    [[ -n "$reconnected" ]] || {
+      printf 'Camera did not return after changing microphone state\n' >&2
+      return 1
+    }
+  fi
+
+  mkdir -p "$STATE_DIR"
+  local fov="wide" auto_framing="off" gesture_control="off" gesture_zoom="2x" mirror="off" vertical="off" led="on" keep_awake="off" auto_sleep="off" hdr="off"
+  local microphone="on" audio_agc="on" audio_distance="standard" audio_mode="omni" sleep_microphone="off"
+  if [[ -r "$VENDOR_STATE" ]]; then
+    fov="$(sed -n 's/^fov=//p' "$VENDOR_STATE" | head -n 1)"
+    auto_framing="$(sed -n 's/^auto_framing=//p' "$VENDOR_STATE" | head -n 1)"
+    gesture_control="$(sed -n 's/^gesture_control=//p' "$VENDOR_STATE" | head -n 1)"
+    gesture_zoom="$(sed -n 's/^gesture_zoom=//p' "$VENDOR_STATE" | head -n 1)"
+    mirror="$(sed -n 's/^mirror=//p' "$VENDOR_STATE" | head -n 1)"
+    vertical="$(sed -n 's/^vertical=//p' "$VENDOR_STATE" | head -n 1)"
+    led="$(sed -n 's/^led=//p' "$VENDOR_STATE" | head -n 1)"
+    keep_awake="$(sed -n 's/^keep_awake=//p' "$VENDOR_STATE" | head -n 1)"
+    auto_sleep="$(sed -n 's/^auto_sleep=//p' "$VENDOR_STATE" | head -n 1)"
+    hdr="$(sed -n 's/^hdr=//p' "$VENDOR_STATE" | head -n 1)"
+    microphone="$(sed -n 's/^microphone=//p' "$VENDOR_STATE" | head -n 1)"
+    audio_agc="$(sed -n 's/^audio_agc=//p' "$VENDOR_STATE" | head -n 1)"
+    audio_distance="$(sed -n 's/^audio_distance=//p' "$VENDOR_STATE" | head -n 1)"
+    audio_mode="$(sed -n 's/^audio_mode=//p' "$VENDOR_STATE" | head -n 1)"
+    sleep_microphone="$(sed -n 's/^sleep_microphone=//p' "$VENDOR_STATE" | head -n 1)"
+    [[ -n "$fov" ]] || fov="wide"
+    [[ -n "$auto_framing" ]] || auto_framing="off"
+    [[ -n "$gesture_control" ]] || gesture_control="off"
+    [[ -n "$gesture_zoom" ]] || gesture_zoom="2x"
+    [[ -n "$mirror" ]] || mirror="off"
+    [[ -n "$vertical" ]] || vertical="off"
+    [[ -n "$led" ]] || led="on"
+    [[ -n "$keep_awake" ]] || keep_awake="off"
+    [[ -n "$auto_sleep" ]] || auto_sleep="off"
+    [[ -n "$hdr" ]] || hdr="off"
+    [[ -n "$microphone" ]] || microphone="on"
+    [[ -n "$audio_agc" ]] || audio_agc="on"
+    [[ -n "$audio_distance" ]] || audio_distance="standard"
+    [[ -n "$audio_mode" ]] || audio_mode="omni"
+    [[ -n "$sleep_microphone" ]] || sleep_microphone="off"
+  fi
+  case "$feature" in
+    fov) fov="$value" ;;
+    auto-framing) auto_framing="$value" ;;
+    gesture-control) gesture_control="$value" ;;
+    gesture-zoom) gesture_zoom="$value" ;;
+    mirror) mirror="$value" ;;
+    vertical) vertical="$value" ;;
+    led) led="$value" ;;
+    keep-awake) keep_awake="$value" ;;
+    auto-sleep) auto_sleep="$value" ;;
+    hdr) hdr="$value" ;;
+    microphone) microphone="$value" ;;
+    audio-agc) audio_agc="$value" ;;
+    audio-distance) audio_distance="$value" ;;
+    audio-mode) audio_mode="$value" ;;
+    sleep-microphone) sleep_microphone="$value" ;;
+  esac
+  printf 'fov=%s\nauto_framing=%s\ngesture_control=%s\ngesture_zoom=%s\nmirror=%s\nvertical=%s\nled=%s\nkeep_awake=%s\nauto_sleep=%s\nhdr=%s\nmicrophone=%s\naudio_agc=%s\naudio_distance=%s\naudio_mode=%s\nsleep_microphone=%s\n' \
+    "$fov" "$auto_framing" "$gesture_control" "$gesture_zoom" "$mirror" "$vertical" "$led" "$keep_awake" "$auto_sleep" "$hdr" \
+    "$microphone" "$audio_agc" "$audio_distance" "$audio_mode" "$sleep_microphone" >"$VENDOR_STATE"
+}
+
+set_control() {
+  local control="${1:-}" value="${2:-}" device
+  case "$control" in
+    brightness|contrast|saturation|hue|sharpness|gain|backlight_compensation|zoom_absolute|focus_absolute|focus_automatic_continuous|auto_exposure|exposure_time_absolute|white_balance_automatic|white_balance_temperature|red_balance|blue_balance|power_line_frequency)
+      ;;
+    *)
+      printf 'Unsupported or unsafe control: %s\n' "$control" >&2
+      return 2
+      ;;
+  esac
+
+  [[ "$value" =~ ^-?[0-9]+$ ]] || {
+    printf 'Value must be an integer\n' >&2
+    return 2
+  }
+
+  device="$(find_camera)" || {
+    printf 'OBSBOT camera not detected\n' >&2
+    return 1
+  }
+  v4l2-ctl --device "$device" --set-ctrl "${control}=${value}"
+}
+
+reset_controls() {
+  local group="${1:-}" device controls names control line default_value values=""
+  case "$group" in
+    optics) names="focus_absolute focus_automatic_continuous auto_exposure exposure_time_absolute gain backlight_compensation" ;;
+    color) names="white_balance_automatic white_balance_temperature red_balance blue_balance power_line_frequency hue" ;;
+    device)
+      set_camera_feature mirror off || return
+      set_camera_feature vertical off || return
+      set_camera_feature led on || return
+      set_camera_feature keep-awake off || return
+      set_camera_feature auto-sleep off || return
+      set_camera_feature hdr off
+      return
+      ;;
+    *)
+      printf 'Reset group must be optics, color, or device\n' >&2
+      return 2
+      ;;
+  esac
+
+  device="$(find_camera)" || {
+    printf 'OBSBOT camera not detected\n' >&2
+    return 1
+  }
+  controls="$(v4l2-ctl --device "$device" --list-ctrls 2>/dev/null)"
+  for control in $names; do
+    line="$(sed -n "/^[[:space:]]*${control}[[:space:]]/p" <<<"$controls" | head -n 1)"
+    default_value="$(sed -n 's/.*default=\(-\?[0-9]\+\).*/\1/p' <<<"$line")"
+    [[ -n "$default_value" ]] || continue
+    [[ -z "$values" ]] || values+=","
+    values+="${control}=${default_value}"
+  done
+  [[ -n "$values" ]] || {
+    printf 'No supported controls found for reset group: %s\n' "$group" >&2
+    return 1
+  }
+  v4l2-ctl --device "$device" --set-ctrl "$values"
+}
+
+apply_preset() {
+  local preset="${1:-}" device values
+  device="$(find_camera)" || {
+    printf 'OBSBOT camera not detected\n' >&2
+    return 1
+  }
+
+  case "$preset" in
+    default)
+      values="brightness=50,contrast=50,saturation=50,hue=50,sharpness=50,backlight_compensation=9,zoom_absolute=0,focus_automatic_continuous=1,auto_exposure=0,white_balance_automatic=1"
+      ;;
+    natural)
+      values="brightness=48,contrast=48,saturation=46,hue=50,sharpness=42,backlight_compensation=9,zoom_absolute=0,focus_automatic_continuous=1,auto_exposure=0,white_balance_automatic=1"
+      ;;
+    low-light)
+      values="brightness=55,contrast=42,saturation=45,hue=50,sharpness=35,backlight_compensation=14,zoom_absolute=0,focus_automatic_continuous=1,auto_exposure=0,white_balance_automatic=1"
+      ;;
+    streaming)
+      values="brightness=50,contrast=55,saturation=56,hue=50,sharpness=58,backlight_compensation=7,zoom_absolute=0,focus_automatic_continuous=1,auto_exposure=0,white_balance_automatic=1"
+      ;;
+    *)
+      printf 'Unknown preset: %s\n' "$preset" >&2
+      return 2
+      ;;
+  esac
+
+  v4l2-ctl --device "$device" --set-ctrl "$values"
+}
+
+case "${1:-}" in
+  detect)
+    detect
+    ;;
+  status)
+    status
+    ;;
+  set)
+    set_control "${2:-}" "${3:-}"
+    ;;
+  reset)
+    reset_controls "${2:-}"
+    ;;
+  preset)
+    apply_preset "${2:-}"
+    ;;
+  camera)
+    set_camera_feature "${2:-}" "${3:-}"
+    ;;
+  audio)
+    set_audio "${2:-}" "${3:-}"
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
