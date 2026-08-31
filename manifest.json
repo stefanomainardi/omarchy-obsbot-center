@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.stefanomainardi.obsbot-center",
   "name": "OBSBOT Center",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": "Stefano Mainardi",
   "license": "MIT",
   "description": "Preview and control an OBSBOT Meet 2 from the Omarchy bar.",

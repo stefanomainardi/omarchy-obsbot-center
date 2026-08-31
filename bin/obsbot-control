@@ -4,13 +4,57 @@ set -u
 
 readonly OBSBOT_VENDOR_ID="3564"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly XU_HELPER="${SCRIPT_DIR}/../tools/xu-probe"
+readonly XU_SOURCE="${SCRIPT_DIR}/../tools/xu-probe.c"
+readonly CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
+readonly CACHE_DIR="${CACHE_HOME}/obsbot-center-omarchy"
 readonly STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
 readonly STATE_DIR="${STATE_HOME}/obsbot-center-omarchy"
 readonly VENDOR_STATE="${STATE_DIR}/meet2.conf"
 
+XU_HELPER=""
+
 usage() {
   printf 'Usage: %s detect | status | set CONTROL VALUE | reset optics|color|device | preset NAME | camera FEATURE VALUE | audio volume VALUE | audio mute on|off|toggle\n' "$0"
+}
+
+ensure_xu_helper() {
+  local source_hash helper_tmp
+
+  [[ -r "$XU_SOURCE" ]] || {
+    printf 'Vendor control helper source is missing: %s\n' "$XU_SOURCE" >&2
+    return 1
+  }
+  command -v cc >/dev/null 2>&1 || {
+    printf 'A C compiler (cc) is required once to build the camera helper\n' >&2
+    return 1
+  }
+  command -v sha256sum >/dev/null 2>&1 || {
+    printf 'sha256sum is required to verify the camera helper source\n' >&2
+    return 1
+  }
+
+  source_hash="$(sha256sum -- "$XU_SOURCE")" || return 1
+  source_hash="${source_hash%% *}"
+  [[ "$source_hash" =~ ^[0-9a-f]{64}$ ]] || {
+    printf 'Could not verify the camera helper source\n' >&2
+    return 1
+  }
+
+  mkdir -p -- "$CACHE_DIR"
+  chmod 700 -- "$CACHE_DIR"
+  XU_HELPER="${CACHE_DIR}/xu-probe-${source_hash}"
+  [[ -x "$XU_HELPER" ]] && return 0
+
+  helper_tmp="$(mktemp --tmpdir="$CACHE_DIR" .xu-probe.XXXXXX)" || return 1
+  if ! cc -std=c11 -Wall -Wextra -Werror -O2 -D_FORTIFY_SOURCE=3 \
+    -fstack-protector-strong -fPIE -pie -Wl,-z,relro,-z,now \
+    "$XU_SOURCE" -o "$helper_tmp"; then
+    rm -f -- "$helper_tmp"
+    printf 'Could not build the camera helper\n' >&2
+    return 1
+  fi
+  chmod 700 -- "$helper_tmp"
+  mv -f -- "$helper_tmp" "$XU_HELPER"
 }
 
 detect() {
@@ -105,7 +149,7 @@ status() {
 
   printf 'connected=1\ndevice=%s\nmodel=%s\nvendor_id=%s\nproduct_id=%s\n' \
     "$device" "${model//_/ }" "$vendor" "$product"
-  if [[ "${vendor,,}" == "$OBSBOT_VENDOR_ID" && "${product,,}" == "fefb" && -x "$XU_HELPER" ]]; then
+  if [[ "${vendor,,}" == "$OBSBOT_VENDOR_ID" && "${product,,}" == "fefb" ]] && ensure_xu_helper; then
     printf 'vendor_controls=1\n'
     if [[ -r "$VENDOR_STATE" ]]; then
       sed -n '/^fov=/p; /^gesture_zoom=/p; /^vertical=/p; /^led=/p; /^keep_awake=/p; /^auto_sleep=/p; /^microphone=/p; /^audio_agc=/p; /^audio_distance=/p; /^audio_mode=/p; /^sleep_microphone=/p' "$VENDOR_STATE"
@@ -192,10 +236,7 @@ set_camera_feature() {
     printf 'This vendor control is currently verified only for OBSBOT Meet 2\n' >&2
     return 2
   fi
-  [[ -x "$XU_HELPER" ]] || {
-    printf 'Vendor control helper is not installed\n' >&2
-    return 1
-  }
+  ensure_xu_helper || return 1
   "$XU_HELPER" "$device" set "$feature" "$value" || return
 
   if [[ "$feature" == "microphone" ]]; then
@@ -368,30 +409,36 @@ apply_preset() {
   v4l2-ctl --device "$device" --set-ctrl "$values"
 }
 
-case "${1:-}" in
-  detect)
-    detect
-    ;;
-  status)
-    status
-    ;;
-  set)
-    set_control "${2:-}" "${3:-}"
-    ;;
-  reset)
-    reset_controls "${2:-}"
-    ;;
-  preset)
-    apply_preset "${2:-}"
-    ;;
-  camera)
-    set_camera_feature "${2:-}" "${3:-}"
-    ;;
-  audio)
-    set_audio "${2:-}" "${3:-}"
-    ;;
-  *)
-    usage >&2
-    exit 2
-    ;;
-esac
+main() {
+  case "${1:-}" in
+    detect)
+      detect
+      ;;
+    status)
+      status
+      ;;
+    set)
+      set_control "${2:-}" "${3:-}"
+      ;;
+    reset)
+      reset_controls "${2:-}"
+      ;;
+    preset)
+      apply_preset "${2:-}"
+      ;;
+    camera)
+      set_camera_feature "${2:-}" "${3:-}"
+      ;;
+    audio)
+      set_audio "${2:-}" "${3:-}"
+      ;;
+    *)
+      usage >&2
+      return 2
+      ;;
+  esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

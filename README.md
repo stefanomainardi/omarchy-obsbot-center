@@ -53,7 +53,7 @@ omarchy plugin enable io.github.stefanomainardi.obsbot-center --section right
 - **Video.** `qt6-multimedia` and `v4l-utils`.
 - **Device discovery.** `udev`.
 - **Microphone controls.** WirePlumber with `wpctl`.
-- **Architecture.** Linux x86-64 for the bundled Meet 2 protocol helper.
+- **Build tools.** A C compiler exposed as `cc`, required once per helper source revision.
 
 No daemon or system service is installed. The plugin does not require root access or a udev rule on a standard Omarchy installation.
 
@@ -169,7 +169,7 @@ Review third-party Omarchy plugins before installing them. Omarchy plugins run u
 - **Software effects.** Virtual camera output, background replacement, blur, beauty filters, and recording are not included.
 - **Exclusive capture.** Another application can prevent the live preview from opening when it holds the camera exclusively.
 - **Model coverage.** Proprietary features are enabled only for the verified Meet 2 USB product ID.
-- **Binary portability.** The bundled protocol helper currently targets Linux x86-64. Its C source is included in `tools/xu-probe.c`.
+- **Initial setup.** The first use of a Meet 2 vendor control compiles the local helper and may take a moment.
 
 ## Remove
 
@@ -192,7 +192,8 @@ The suite checks:
 - **Manifest and scripts.** Plugin validation and shell syntax.
 - **Protocol encoding.** Every known Meet 2 command frame and rejected value.
 - **Audio controls.** PipeWire source selection, volume, mute, and invalid input.
-- **Native helper.** Warning-free C compilation.
+- **Native helper.** Warning-free hardened C compilation into a temporary test directory.
+- **Local build cache.** Source-hash naming, private permissions, and cache reuse.
 - **Theming.** Rejection of fixed hexadecimal UI colors in QML.
 
 No automated test changes physical camera state. Hardware verification remains a separate manual step.
@@ -205,7 +206,6 @@ Panel.qml              Theme-aware control panel and preview lifecycle
 ControlSlider.qml      Shared camera slider
 bin/obsbot-control     Device discovery and safe command-line backend
 tools/xu-probe.c       Meet 2 USB extension-unit protocol helper source
-tools/xu-probe         Bundled Linux x86-64 helper
 tests/                 Protocol, audio, and static regression tests
 manifest.json          Omarchy plugin metadata and settings schema
 ```
@@ -215,6 +215,8 @@ manifest.json          Omarchy plugin metadata and settings schema
 Meet 2 vendor controls were derived for Linux interoperability by inspecting the official desktop application's behavior and validating individual USB extension-unit frames against hardware. The project does not include vendor code, firmware, or proprietary assets.
 
 Protocol support is intentionally conservative. Unknown models and values are rejected instead of being guessed.
+
+The plugin never ships or downloads a prebuilt helper. On first use, it compiles `tools/xu-probe.c` into `~/.cache/obsbot-center-omarchy/`. The cache filename includes the source SHA-256, so a source update produces a new executable without trusting an older artifact.
 
 ## Contributing
 

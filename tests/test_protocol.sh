@@ -3,7 +3,13 @@
 set -euo pipefail
 
 readonly ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly HELPER="${ROOT_DIR}/tools/xu-probe"
+readonly BUILD_DIR="$(mktemp -d)"
+readonly HELPER="${BUILD_DIR}/xu-probe"
+trap 'rm -rf -- "$BUILD_DIR"' EXIT
+
+cc -std=c11 -Wall -Wextra -Werror -O2 -D_FORTIFY_SOURCE=3 \
+  -fstack-protector-strong -fPIE -pie -Wl,-z,relro,-z,now \
+  "${ROOT_DIR}/tools/xu-probe.c" -o "$HELPER"
 
 assert_prefix() {
   local feature="$1" value="$2" expected="$3" actual
