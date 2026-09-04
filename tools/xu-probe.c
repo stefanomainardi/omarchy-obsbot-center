@@ -22,6 +22,12 @@ static int query(int fd, uint8_t unit, uint8_t selector, uint8_t request,
   return ioctl(fd, UVCIOC_CTRL_QUERY, &control);
 }
 
+/* Gesture zoom travels as a ratio scaled by 100 (2x -> 200). The camera
+   reports it back in quarter units, so 2x reads as 50. */
+#define GESTURE_ZOOM_SCALE 100
+#define GESTURE_ZOOM_DEFAULT 200
+#define GESTURE_ZOOM_READ_UNITS 25
+
 static int build_command(const char *name, const char *value,
                          uint8_t frame[60]) {
   memset(frame, 0, 60);
@@ -85,8 +91,11 @@ static int build_command(const char *name, const char *value,
     frame[2] = enabled;
     frame[3] = 0x02;
     frame[4] = enabled;
-    frame[5] = 0x02;
-    frame[6] = 0x00;
+    /* The zoom factor shares this frame. Callers with an open device replace
+       these two bytes with the factor already stored in the camera so that
+       toggling gesture control never silently resets it. */
+    frame[5] = GESTURE_ZOOM_DEFAULT & 0xff;
+    frame[6] = (GESTURE_ZOOM_DEFAULT >> 8) & 0xff;
   } else if (strcmp(name, "gesture-zoom") == 0) {
     unsigned int factor;
     if (strcmp(value, "1x") == 0)
@@ -99,6 +108,11 @@ static int build_command(const char *name, const char *value,
       factor = 4;
     else
       return 2;
+    /* The firmware reads the factor as a fixed-point ratio scaled by 100, so
+       2x travels as 200. Sending the bare multiplier lands far below 1.00x:
+       the camera still recognizes the gesture and lights the LED, but applies
+       no zoom at all. */
+    factor *= GESTURE_ZOOM_SCALE;
     frame[0] = 0x20;
     frame[1] = 0x05;
     frame[2] = 0x01;
@@ -158,10 +172,30 @@ static int build_command(const char *name, const char *value,
   return 0;
 }
 
+/* Returns the gesture zoom ratio scaled by 100, or 0 when the camera state
+   cannot be read or holds a value outside the 1x to 4x range. */
+static unsigned int read_gesture_zoom(int fd) {
+  uint8_t current[60] = {0};
+  if (query(fd, 2, 6, UVC_GET_CUR, current, sizeof(current)) != 0) return 0;
+  unsigned int units = ((unsigned int)current[39] << 2) | (current[38] >> 6);
+  if (units < GESTURE_ZOOM_READ_UNITS || units > 4 * GESTURE_ZOOM_READ_UNITS)
+    return 0;
+  if (units % GESTURE_ZOOM_READ_UNITS != 0) return 0;
+  return (units / GESTURE_ZOOM_READ_UNITS) * GESTURE_ZOOM_SCALE;
+}
+
 static int send_command(int fd, const char *name, const char *value) {
   uint8_t frame[60];
   int result = build_command(name, value, frame);
   if (result != 0) return result;
+
+  if (strcmp(name, "gesture-control") == 0) {
+    unsigned int stored = read_gesture_zoom(fd);
+    if (stored != 0) {
+      frame[5] = stored & 0xff;
+      frame[6] = (stored >> 8) & 0xff;
+    }
+  }
 
   if (query(fd, 2, 6, UVC_SET_CUR, frame, sizeof(frame)) != 0) {
     fprintf(stderr, "vendor command failed: %s\n", strerror(errno));
@@ -215,6 +249,12 @@ int main(int argc, char **argv) {
     printf("mirror=%s\n", current[19] != 0 ? "on" : "off");
     printf("gesture_control=%s\n",
            (current[38] & 0x09) == 0x09 ? "on" : "off");
+    unsigned int zoom_units =
+        ((unsigned int)current[39] << 2) | (current[38] >> 6);
+    if (zoom_units >= GESTURE_ZOOM_READ_UNITS &&
+        zoom_units <= 4 * GESTURE_ZOOM_READ_UNITS &&
+        zoom_units % GESTURE_ZOOM_READ_UNITS == 0)
+      printf("gesture_zoom=%ux\n", zoom_units / GESTURE_ZOOM_READ_UNITS);
     close(fd);
     return 0;
   }

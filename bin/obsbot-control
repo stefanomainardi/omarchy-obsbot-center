@@ -152,9 +152,17 @@ status() {
   if [[ "${vendor,,}" == "$OBSBOT_VENDOR_ID" && "${product,,}" == "fefb" ]] && ensure_xu_helper; then
     printf 'vendor_controls=1\n'
     if [[ -r "$VENDOR_STATE" ]]; then
-      sed -n '/^fov=/p; /^gesture_zoom=/p; /^vertical=/p; /^led=/p; /^keep_awake=/p; /^auto_sleep=/p; /^microphone=/p; /^audio_agc=/p; /^audio_distance=/p; /^audio_mode=/p; /^sleep_microphone=/p' "$VENDOR_STATE"
+      sed -n '/^fov=/p; /^vertical=/p; /^led=/p; /^keep_awake=/p; /^auto_sleep=/p; /^microphone=/p; /^audio_agc=/p; /^audio_distance=/p; /^audio_mode=/p; /^sleep_microphone=/p' "$VENDOR_STATE"
     fi
-    "$XU_HELPER" "$device" state 2>/dev/null || true
+    local vendor_live
+    vendor_live="$("$XU_HELPER" "$device" state 2>/dev/null || true)"
+    [[ -n "$vendor_live" ]] && printf '%s\n' "$vendor_live"
+    # The camera reports the gesture zoom factor itself; the cached value is
+    # only a fallback for firmware that does not surface it.
+    if [[ "$vendor_live" != *$'\n'gesture_zoom=* && "$vendor_live" != gesture_zoom=* ]] &&
+      [[ -r "$VENDOR_STATE" ]]; then
+      sed -n '/^gesture_zoom=/p' "$VENDOR_STATE"
+    fi
   else
     printf 'vendor_controls=0\n'
   fi

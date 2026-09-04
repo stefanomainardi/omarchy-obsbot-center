@@ -42,11 +42,14 @@ assert_prefix audio-mode pure 22020005
 assert_prefix audio-mode omni 22020000
 assert_prefix audio-mode directional 22020002
 assert_prefix audio-mode dual-directional 22020004
-assert_prefix gesture-control on 20050102010200
-assert_prefix gesture-zoom 1x 20050102010100
-assert_prefix gesture-zoom 2x 20050102010200
-assert_prefix gesture-zoom 3x 20050102010300
-assert_prefix gesture-zoom 4x 20050102010400
+# The gesture zoom factor is a ratio scaled by 100, and it shares the frame
+# with the gesture control toggle, so both carry it.
+assert_prefix gesture-control on 2005010201c800
+assert_prefix gesture-control off 2005000200c800
+assert_prefix gesture-zoom 1x 20050102016400
+assert_prefix gesture-zoom 2x 2005010201c800
+assert_prefix gesture-zoom 3x 20050102012c01
+assert_prefix gesture-zoom 4x 20050102019001
 assert_prefix auto-sleep off 0b020000
 assert_prefix auto-sleep 30s 0b021e00
 assert_prefix auto-sleep 2m 0b027800
