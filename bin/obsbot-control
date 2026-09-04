@@ -10,15 +10,90 @@ readonly CACHE_DIR="${CACHE_HOME}/obsbot-center-omarchy"
 readonly STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
 readonly STATE_DIR="${STATE_HOME}/obsbot-center-omarchy"
 readonly VENDOR_STATE="${STATE_DIR}/meet2.conf"
+# Every local hardware tool runs under a wall-clock bound and an output cap so a
+# wedged USB device cannot hang the bar or flood the QML parser.
+readonly TOOL_TIMEOUT="${OBSBOT_TOOL_TIMEOUT:-5}"
+readonly BUILD_TIMEOUT="${OBSBOT_BUILD_TIMEOUT:-120}"
+readonly TOOL_OUTPUT_CAP=65536
 
 XU_HELPER=""
+
+run_bounded_for() {
+  local seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --kill-after=1 -- "$seconds" "$@" | head -c "$TOOL_OUTPUT_CAP"
+  else
+    "$@" | head -c "$TOOL_OUTPUT_CAP"
+  fi
+  return "${PIPESTATUS[0]}"
+}
+
+run_bounded() {
+  run_bounded_for "$TOOL_TIMEOUT" "$@"
+}
+
+# Cache and state live under paths another process running as the same user
+# could pre-create. Refuse symlinks and anything not owned by this user, and
+# create missing directories directly with mode 0700.
+ensure_private_dir() {
+  local dir="$1"
+  if [[ -L "$dir" ]]; then
+    printf 'Refusing symlinked directory: %s\n' "$dir" >&2
+    return 1
+  fi
+  if [[ ! -e "$dir" ]]; then
+    mkdir -p -- "$(dirname -- "$dir")" 2>/dev/null || true
+    mkdir -m 700 -- "$dir" 2>/dev/null || true
+    if [[ -L "$dir" ]]; then
+      printf 'Refusing symlinked directory: %s\n' "$dir" >&2
+      return 1
+    fi
+  fi
+  [[ -d "$dir" ]] || {
+    printf 'Could not create private directory: %s\n' "$dir" >&2
+    return 1
+  }
+  [[ "$(stat -c %u -- "$dir" 2>/dev/null)" == "$EUID" ]] || {
+    printf 'Refusing directory not owned by the current user: %s\n' "$dir" >&2
+    return 1
+  }
+  [[ "$(stat -c %a -- "$dir" 2>/dev/null)" == "700" ]] || chmod 700 -- "$dir" || return 1
+}
+
+# A file is private when it is a regular file, not a symlink, owned by this
+# user, and not writable by anyone else.
+private_file() {
+  local file="$1" mode
+  [[ -L "$file" ]] && return 1
+  [[ -f "$file" ]] || return 1
+  [[ "$(stat -c %u -- "$file" 2>/dev/null)" == "$EUID" ]] || return 1
+  mode="$(stat -c %a -- "$file" 2>/dev/null)" || return 1
+  [[ "$mode" =~ ^[0-7]?[0-7]00$ ]]
+}
+
+# The cached helper is trusted only when it is private and its content matches
+# the SHA-256 recorded when this script built it.
+helper_is_trusted() {
+  local helper="$1" recorded actual
+  private_file "$helper" || return 1
+  [[ -x "$helper" ]] || return 1
+  private_file "${helper}.sha256" || return 1
+  recorded="$(<"${helper}.sha256")" || return 1
+  actual="$(sha256sum -- "$helper")" || return 1
+  [[ "$recorded" == "${actual%% *}" ]]
+}
+
+vendor_state_readable() {
+  [[ -r "$VENDOR_STATE" ]] && private_file "$VENDOR_STATE"
+}
 
 usage() {
   printf 'Usage: %s detect | status | set CONTROL VALUE | reset optics|color|device | preset NAME | camera FEATURE VALUE | audio volume VALUE | audio mute on|off|toggle\n' "$0"
 }
 
 ensure_xu_helper() {
-  local source_hash helper_tmp
+  local source_hash helper_tmp hash_tmp helper_hash
 
   [[ -r "$XU_SOURCE" ]] || {
     printf 'Vendor control helper source is missing: %s\n' "$XU_SOURCE" >&2
@@ -40,13 +115,14 @@ ensure_xu_helper() {
     return 1
   }
 
-  mkdir -p -- "$CACHE_DIR"
-  chmod 700 -- "$CACHE_DIR"
+  ensure_private_dir "$CACHE_DIR" || return 1
   XU_HELPER="${CACHE_DIR}/xu-probe-${source_hash}"
-  [[ -x "$XU_HELPER" ]] && return 0
+  helper_is_trusted "$XU_HELPER" && return 0
+  # Anything already at that path failed the trust check: drop it and rebuild.
+  rm -f -- "$XU_HELPER" "${XU_HELPER}.sha256"
 
   helper_tmp="$(mktemp --tmpdir="$CACHE_DIR" .xu-probe.XXXXXX)" || return 1
-  if ! cc -std=c11 -Wall -Wextra -Werror -O2 -D_FORTIFY_SOURCE=3 \
+  if ! run_bounded_for "$BUILD_TIMEOUT" cc -std=c11 -Wall -Wextra -Werror -O2 -D_FORTIFY_SOURCE=3 \
     -fstack-protector-strong -fPIE -pie -Wl,-z,relro,-z,now \
     "$XU_SOURCE" -o "$helper_tmp"; then
     rm -f -- "$helper_tmp"
@@ -54,6 +130,11 @@ ensure_xu_helper() {
     return 1
   fi
   chmod 700 -- "$helper_tmp"
+  hash_tmp="$(mktemp --tmpdir="$CACHE_DIR" .xu-probe.sha256.XXXXXX)" || { rm -f -- "$helper_tmp"; return 1; }
+  chmod 600 -- "$hash_tmp"
+  helper_hash="$(sha256sum -- "$helper_tmp")" || { rm -f -- "$helper_tmp" "$hash_tmp"; return 1; }
+  printf '%s\n' "${helper_hash%% *}" >"$hash_tmp"
+  mv -f -- "$hash_tmp" "${XU_HELPER}.sha256"
   mv -f -- "$helper_tmp" "$XU_HELPER"
 }
 
@@ -61,7 +142,7 @@ detect() {
   local node properties vendor product_name capabilities
   for node in /dev/video*; do
     [[ -e "$node" ]] || continue
-    properties="$(udevadm info --query=property --name="$node" 2>/dev/null)"
+    properties="$(run_bounded udevadm info --query=property --name="$node" 2>/dev/null)"
     vendor="$(sed -n 's/^ID_VENDOR_ID=//p' <<<"$properties" | head -n 1)"
     product_name="$(sed -n 's/^ID_V4L_PRODUCT=//p' <<<"$properties" | head -n 1)"
     capabilities="$(sed -n 's/^ID_V4L_CAPABILITIES=//p' <<<"$properties" | head -n 1)"
@@ -75,7 +156,7 @@ detect() {
 
 find_audio_source() {
   command -v wpctl >/dev/null 2>&1 || return 1
-  wpctl status -n 2>/dev/null \
+  run_bounded wpctl status -n 2>/dev/null \
     | sed -n '/Sources:/,/Filters:/p' \
     | sed -n '/OBSBOT/{s/.*[^0-9]\([0-9][0-9]*\)\..*OBSBOT.*/\1/p;q}'
 }
@@ -85,10 +166,10 @@ find_camera() {
 
   for node in /dev/video*; do
     [[ -e "$node" ]] || continue
-    properties="$(udevadm info --query=property --name="$node" 2>/dev/null)"
+    properties="$(run_bounded udevadm info --query=property --name="$node" 2>/dev/null)"
     vendor="$(sed -n 's/^ID_VENDOR_ID=//p' <<<"$properties" | head -n 1)"
     product_name="$(sed -n 's/^ID_V4L_PRODUCT=//p' <<<"$properties" | head -n 1)"
-    capabilities="$(v4l2-ctl --device "$node" --all 2>/dev/null | sed -n '/Device Caps/,/Media Driver Info/p')"
+    capabilities="$(run_bounded v4l2-ctl --device "$node" --all 2>/dev/null | sed -n '/Device Caps/,/Media Driver Info/p')"
 
     if [[ ("${vendor,,}" == "$OBSBOT_VENDOR_ID" || "${product_name,,}" == *obsbot*) && "$capabilities" == *"Video Capture"* ]]; then
       printf '%s\n' "$node"
@@ -101,14 +182,14 @@ find_camera() {
 
 device_property() {
   local device="$1" property="$2"
-  udevadm info --query=property --name="$device" 2>/dev/null \
+  run_bounded udevadm info --query=property --name="$device" 2>/dev/null \
     | sed -n "s/^${property}=//p" \
     | head -n 1
 }
 
 read_control() {
   local device="$1" control="$2" value
-  value="$(v4l2-ctl --device "$device" --get-ctrl "$control" 2>/dev/null)" || return 0
+  value="$(run_bounded v4l2-ctl --device "$device" --get-ctrl "$control" 2>/dev/null)" || return 0
   value="${value##*: }"
   printf '%s=%s\n' "$control" "${value%% *}"
 }
@@ -145,22 +226,22 @@ status() {
   model="$(device_property "$device" ID_MODEL)"
   vendor="$(device_property "$device" ID_VENDOR_ID)"
   product="$(device_property "$device" ID_MODEL_ID)"
-  controls="$(v4l2-ctl --device "$device" --list-ctrls 2>/dev/null)"
+  controls="$(run_bounded v4l2-ctl --device "$device" --list-ctrls 2>/dev/null)"
 
   printf 'connected=1\ndevice=%s\nmodel=%s\nvendor_id=%s\nproduct_id=%s\n' \
     "$device" "${model//_/ }" "$vendor" "$product"
   if [[ "${vendor,,}" == "$OBSBOT_VENDOR_ID" && "${product,,}" == "fefb" ]] && ensure_xu_helper; then
     printf 'vendor_controls=1\n'
-    if [[ -r "$VENDOR_STATE" ]]; then
+    if vendor_state_readable; then
       sed -n '/^fov=/p; /^vertical=/p; /^led=/p; /^keep_awake=/p; /^auto_sleep=/p; /^microphone=/p; /^audio_agc=/p; /^audio_distance=/p; /^audio_mode=/p; /^sleep_microphone=/p' "$VENDOR_STATE"
     fi
     local vendor_live
-    vendor_live="$("$XU_HELPER" "$device" state 2>/dev/null || true)"
+    vendor_live="$(run_bounded "$XU_HELPER" "$device" state 2>/dev/null || true)"
     [[ -n "$vendor_live" ]] && printf '%s\n' "$vendor_live"
     # The camera reports the gesture zoom factor itself; the cached value is
     # only a fallback for firmware that does not surface it.
     if [[ "$vendor_live" != *$'\n'gesture_zoom=* && "$vendor_live" != gesture_zoom=* ]] &&
-      [[ -r "$VENDOR_STATE" ]]; then
+      vendor_state_readable; then
       sed -n '/^gesture_zoom=/p' "$VENDOR_STATE"
     fi
   else
@@ -178,7 +259,7 @@ status() {
   done
 
   if audio_source="$(find_audio_source)" && [[ -n "$audio_source" ]]; then
-    audio_status="$(wpctl get-volume "$audio_source" 2>/dev/null || true)"
+    audio_status="$(run_bounded wpctl get-volume "$audio_source" 2>/dev/null || true)"
     audio_volume="$(awk '{ printf "%d", ($2 * 100) + 0.5 }' <<<"$audio_status")"
     printf 'audio_source_available=1\naudio_source=%s\nmic_volume=%s\nmic_muted=%s\n' \
       "$audio_source" "${audio_volume:-100}" "$([[ "$audio_status" == *'[MUTED]'* ]] && printf on || printf off)"
@@ -204,13 +285,13 @@ set_audio() {
         printf 'Microphone volume must be an integer from 0 to 150\n' >&2
         return 2
       }
-      wpctl set-volume "$audio_source" "${value}%"
+      run_bounded wpctl set-volume "$audio_source" "${value}%"
       ;;
     mute)
       case "$value" in
-        on) wpctl set-mute "$audio_source" 1 ;;
-        off) wpctl set-mute "$audio_source" 0 ;;
-        toggle) wpctl set-mute "$audio_source" toggle ;;
+        on) run_bounded wpctl set-mute "$audio_source" 1 ;;
+        off) run_bounded wpctl set-mute "$audio_source" 0 ;;
+        toggle) run_bounded wpctl set-mute "$audio_source" toggle ;;
         *)
         printf 'Microphone mute value must be on, off, or toggle\n' >&2
         return 2
@@ -245,7 +326,7 @@ set_camera_feature() {
     return 2
   fi
   ensure_xu_helper || return 1
-  "$XU_HELPER" "$device" set "$feature" "$value" || return
+  run_bounded "$XU_HELPER" "$device" set "$feature" "$value" || return
 
   if [[ "$feature" == "microphone" ]]; then
     local attempt reconnected=""
@@ -265,11 +346,10 @@ set_camera_feature() {
     }
   fi
 
-  mkdir -p -- "$STATE_DIR"
-  chmod 700 -- "$STATE_DIR"
+  ensure_private_dir "$STATE_DIR" || return 1
   local fov="wide" auto_framing="off" gesture_control="off" gesture_zoom="2x" mirror="off" vertical="off" led="on" keep_awake="off" auto_sleep="off" hdr="off"
   local microphone="on" audio_agc="on" audio_distance="standard" audio_mode="omni" sleep_microphone="off"
-  if [[ -r "$VENDOR_STATE" ]]; then
+  if vendor_state_readable; then
     fov="$(sed -n 's/^fov=//p' "$VENDOR_STATE" | head -n 1)"
     auto_framing="$(sed -n 's/^auto_framing=//p' "$VENDOR_STATE" | head -n 1)"
     gesture_control="$(sed -n 's/^gesture_control=//p' "$VENDOR_STATE" | head -n 1)"
@@ -346,7 +426,7 @@ set_control() {
     printf 'OBSBOT camera not detected\n' >&2
     return 1
   }
-  v4l2-ctl --device "$device" --set-ctrl "${control}=${value}"
+  run_bounded v4l2-ctl --device "$device" --set-ctrl "${control}=${value}"
 }
 
 reset_controls() {
@@ -373,7 +453,7 @@ reset_controls() {
     printf 'OBSBOT camera not detected\n' >&2
     return 1
   }
-  controls="$(v4l2-ctl --device "$device" --list-ctrls 2>/dev/null)"
+  controls="$(run_bounded v4l2-ctl --device "$device" --list-ctrls 2>/dev/null)"
   for control in $names; do
     line="$(sed -n "/^[[:space:]]*${control}[[:space:]]/p" <<<"$controls" | head -n 1)"
     default_value="$(sed -n 's/.*default=\(-\?[0-9]\+\).*/\1/p' <<<"$line")"
@@ -385,7 +465,7 @@ reset_controls() {
     printf 'No supported controls found for reset group: %s\n' "$group" >&2
     return 1
   }
-  v4l2-ctl --device "$device" --set-ctrl "$values"
+  run_bounded v4l2-ctl --device "$device" --set-ctrl "$values"
 }
 
 apply_preset() {
@@ -414,7 +494,7 @@ apply_preset() {
       ;;
   esac
 
-  v4l2-ctl --device "$device" --set-ctrl "$values"
+  run_bounded v4l2-ctl --device "$device" --set-ctrl "$values"
 }
 
 main() {

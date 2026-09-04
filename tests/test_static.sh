@@ -6,11 +6,12 @@ readonly ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$ROOT_DIR"
 omarchy plugin validate .
-bash -n bin/obsbot-control tests/test_audio.sh tests/test_helper_build.sh tests/test_protocol.sh tests/test_static.sh
+bash -n bin/obsbot-control tests/test_audio.sh tests/test_hardening.sh tests/test_helper_build.sh tests/test_protocol.sh tests/test_static.sh
 bin/obsbot-control detect | rg -q '^connected=[01]$'
 tests/test_protocol.sh
 tests/test_audio.sh
 tests/test_helper_build.sh
+tests/test_hardening.sh
 
 if find tools -maxdepth 1 -type f -executable ! -name '*.c' | grep -q .; then
   printf 'FAIL: repository contains a prebuilt executable helper\n' >&2

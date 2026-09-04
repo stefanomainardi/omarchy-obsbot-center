@@ -161,6 +161,10 @@ The plugin runs inside the Omarchy shell with the current user's permissions. It
 
 `QtMultimedia` accesses the video device only for the optional live preview. The helper invokes `udevadm`, `v4l2-ctl`, and `wpctl` locally. It restricts V4L2 and Meet 2 writes to known controls and validated values.
 
+Every local tool call runs under a wall-clock timeout with a capped output size, and the USB helper bounds its own device session with an alarm, so a camera that stops answering cannot hang the bar. Set `OBSBOT_TOOL_TIMEOUT` (seconds, default `5`) to adjust the bound.
+
+The cache and state directories are created with mode `0700` and refused when they are symlinks or owned by another user. The cached helper is executed only when it is a private regular file whose SHA-256 matches the record written at build time; anything else at that path is discarded and rebuilt from source.
+
 Review third-party Omarchy plugins before installing them. Omarchy plugins run unsandboxed inside a long-running shell process.
 
 ## Known limitations
@@ -193,7 +197,8 @@ The suite checks:
 - **Protocol encoding.** Every known Meet 2 command frame and rejected value.
 - **Audio controls.** PipeWire source selection, volume, mute, and invalid input.
 - **Native helper.** Warning-free hardened C compilation into a temporary test directory.
-- **Local build cache.** Source-hash naming, private permissions, and cache reuse.
+- **Local build cache.** Source-hash naming, private permissions, hash record, and cache reuse.
+- **Hardening.** Symlinked or loose cache and state paths, planted or tampered helpers, tool timeouts, and output caps.
 - **Theming.** Rejection of fixed hexadecimal UI colors in QML.
 
 No automated test changes physical camera state. Hardware verification remains a separate manual step.
@@ -206,7 +211,7 @@ Panel.qml              Theme-aware control panel and preview lifecycle
 ControlSlider.qml      Shared camera slider
 bin/obsbot-control     Device discovery and safe command-line backend
 tools/xu-probe.c       Meet 2 USB extension-unit protocol helper source
-tests/                 Protocol, audio, and static regression tests
+tests/                 Protocol, audio, hardening, and static regression tests
 manifest.json          Omarchy plugin metadata and settings schema
 ```
 
@@ -216,7 +221,7 @@ Meet 2 vendor controls were derived for Linux interoperability by inspecting the
 
 Protocol support is intentionally conservative. Unknown models and values are rejected instead of being guessed.
 
-The plugin never ships or downloads a prebuilt helper. On first use, it compiles `tools/xu-probe.c` into `~/.cache/obsbot-center-omarchy/`. The cache filename includes the source SHA-256, so a source update produces a new executable without trusting an older artifact.
+The plugin never ships or downloads a prebuilt helper. On first use, it compiles `tools/xu-probe.c` into `~/.cache/obsbot-center-omarchy/`. The cache filename includes the source SHA-256, so a source update produces a new executable without trusting an older artifact. A separate record stores the SHA-256 of the compiled helper, and the helper is rebuilt whenever the two no longer match.
 
 ## Contributing
 

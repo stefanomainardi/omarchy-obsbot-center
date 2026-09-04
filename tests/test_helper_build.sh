@@ -17,7 +17,11 @@ ensure_xu_helper
 readonly FIRST_HELPER="$XU_HELPER"
 readonly EXPECTED_HASH="$(sha256sum "$ROOT_DIR/tools/xu-probe.c" | sed 's/ .*//')"
 
-[[ "$(find "$TEST_CACHE/obsbot-center-omarchy" -maxdepth 1 -type f | wc -l)" == "1" ]]
+# One helper plus its SHA-256 record, no leftover temporary files.
+[[ "$(find "$TEST_CACHE/obsbot-center-omarchy" -maxdepth 1 -type f | wc -l)" == "2" ]]
+[[ -f "$FIRST_HELPER.sha256" ]]
+[[ "$(stat -c %a "$FIRST_HELPER.sha256")" == "600" ]]
+[[ "$(<"$FIRST_HELPER.sha256")" == "$(sha256sum "$FIRST_HELPER" | sed 's/ .*//')" ]]
 [[ "$FIRST_HELPER" == "$TEST_CACHE/obsbot-center-omarchy/xu-probe-$EXPECTED_HASH" ]]
 [[ -x "$FIRST_HELPER" ]]
 [[ "$(stat -c %a "$TEST_CACHE/obsbot-center-omarchy")" == "700" ]]

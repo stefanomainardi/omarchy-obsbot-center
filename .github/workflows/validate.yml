@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check shell syntax
-        run: bash -n bin/obsbot-control tests/test_audio.sh tests/test_helper_build.sh tests/test_protocol.sh tests/test_static.sh
+        run: bash -n bin/obsbot-control tests/test_audio.sh tests/test_hardening.sh tests/test_helper_build.sh tests/test_protocol.sh tests/test_static.sh
 
       - name: Build protocol helper
         run: cc -std=c11 -Wall -Wextra -Werror -O2 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIE -pie -Wl,-z,relro,-z,now tools/xu-probe.c -o /tmp/xu-probe
@@ -28,6 +28,9 @@ jobs:
 
       - name: Test local helper build
         run: tests/test_helper_build.sh
+
+      - name: Test cache and process hardening
+        run: tests/test_hardening.sh
 
       - name: Check theme safety
         run: |

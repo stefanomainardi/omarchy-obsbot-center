@@ -204,7 +204,14 @@ static int send_command(int fd, const char *name, const char *value) {
   return 0;
 }
 
+/* UVC control transfers are synchronous. A camera that stops answering would
+   otherwise pin this process, and the bar with it, so every device session is
+   bounded by a wall-clock alarm whose default action terminates the process. */
+#define IO_TIMEOUT_SECONDS 4
+
 int main(int argc, char **argv) {
+  alarm(IO_TIMEOUT_SECONDS);
+
   if (argc == 4 && strcmp(argv[1], "--encode") == 0) {
     uint8_t frame[60];
     int result = build_command(argv[2], argv[3], frame);
