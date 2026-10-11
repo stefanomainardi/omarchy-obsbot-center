@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Column {
@@ -22,14 +23,14 @@ Column {
     Text {
       width: parent.width - valueLabel.width
       text: root.label
-      color: Color.foreground
+      color: Commons.Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.body
     }
     Text {
       id: valueLabel
       text: String(Math.round(slider.liveValue)) + root.suffix
-      color: Color.muted
+      color: Commons.Color.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
     }

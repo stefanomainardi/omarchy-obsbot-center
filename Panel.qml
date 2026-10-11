@@ -3,6 +3,7 @@ import QtMultimedia
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Panel {
@@ -59,10 +60,10 @@ Panel {
   property var previewPending: null
 
   readonly property string helper: Qt.resolvedUrl("bin/obsbot-control").toString().replace("file://", "")
-  readonly property color themeForeground: root.bar ? root.bar.foreground : Color.foreground
-  readonly property color themeBackground: root.bar ? root.bar.background : Color.background
-  readonly property color themeAccent: Color.accent
-  readonly property color themeUrgent: root.bar ? root.bar.urgent : Color.urgent
+  readonly property color themeForeground: root.bar ? root.bar.foreground : Commons.Color.foreground
+  readonly property color themeBackground: root.bar ? root.bar.background : Commons.Color.background
+  readonly property color themeAccent: Commons.Color.accent
+  readonly property color themeUrgent: root.bar ? root.bar.urgent : Commons.Color.urgent
   readonly property color themeMuted: Qt.darker(root.themeForeground, 1.5)
   readonly property int refreshIntervalSec: Math.max(2, Math.min(60, Number(setting("refreshIntervalSec", 5)) || 5))
   readonly property bool previewSetting: setting("preview", true) !== false
